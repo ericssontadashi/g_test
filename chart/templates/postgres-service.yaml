@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "comments-api.fullname" . }}-postgres
+  labels:
+    app: {{ include "comments-api.fullname" . }}-postgres
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ include "comments-api.fullname" . }}-postgres
+  ports:
+    - port: {{ .Values.postgres.port }}
+      targetPort: {{ .Values.postgres.port }}
+      protocol: TCP
+      name: pg

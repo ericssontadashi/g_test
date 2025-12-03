@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+data:
+  loki-config.yaml: |
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+    
+    memberlist:
+      join_members:
+        - loki
+      abort_if_cluster_join_fails: false  
+
+    ingester:
+      lifecycler:
+        ring:
+          replication_factor: 1
+          kvstore:
+            store: memberlist 
+        address: 127.0.0.1
+      chunk_idle_period: 3m
+      chunk_retain_period: 1m
+
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    storage_config:
+      tsdb_shipper:
+        active_index_directory: /data/loki/index
+        cache_location: /data/loki/cache
+      filesystem:
+        directory: /data/loki/chunks
+
+    limits_config:
+      allow_structured_metadata: true
+
+    common:
+      replication_factor: 1
+      path_prefix: /data/loki
+      ring:
+        kvstore:
+          store: memberlist  
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+  template:
+    metadata:
+      labels:
+        app: loki
+    spec:
+      containers:
+        - name: loki
+          image: grafana/loki:latest
+          args:
+            - "-config.file=/etc/loki/loki-config.yaml"
+          ports:
+            - containerPort: 3100
+            - containerPort: 7946
+          volumeMounts:
+            - name: loki-config
+              mountPath: /etc/loki
+            - name: loki-data
+              mountPath: /data/loki
+      volumes:
+        - name: loki-config
+          configMap:
+            name: loki-config
+        - name: loki-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+spec:
+  clusterIP: None
+  ports:
+    - name: http
+      port: 3100
+      targetPort: 3100
+    - name: memberlist
+      port: 7946
+      targetPort: 7946
+  selector:
+    app: loki

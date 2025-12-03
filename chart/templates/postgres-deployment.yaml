@@ -1,0 +1,32 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "comments-api.fullname" . }}-postgres
+  labels:
+    app: {{ include "comments-api.fullname" . }}-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "comments-api.fullname" . }}-postgres
+  template:
+    metadata:
+     labels:
+        app: {{ include "comments-api.fullname" . }}-postgres
+    spec:
+      containers:
+      - name: postgres
+        image: {{ .Values.postgres.image }}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: {{ .Values.postgres.port }}
+          name: postgres
+        env:
+        - name: POSTGRES_DB
+          value: "{{ .Values.postgres.postgresqlDatabase }}"
+        - name: POSTGRES_USER
+          value: "{{ .Values.postgres.postgresqlUsername }}"
+        - name: POSTGRES_PASSWORD
+          value: "{{ .Values.postgres.postgresqlPassword }}"
+{{- end }}

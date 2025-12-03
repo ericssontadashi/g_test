@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "comments-api.fullname" . }}
+  labels:
+    app: {{ include "comments-api.name" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "comments-api.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "comments-api.name" . }}
+    spec:
+      containers:
+      - name: comments-api
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DATABASE_URL
+          value: "postgresql+asyncpg://{{ .Values.postgres.postgresqlUsername }}:{{ .Values.postgres.postgresqlPassword }}@{{ include "comments-api.fullname" . }}-postgres:{{ .Values.postgres.port }}/{{ .Values.postgres.postgresqlDatabase }}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "otel-collector:4317"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 20

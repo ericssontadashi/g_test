@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: "0.0.0.0:4317"
+          http:
+            endpoint: "0.0.0.0:4318"
+    
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 512
+
+    exporters:
+      debug:
+        verbosity: detailed
+      prometheus:
+        endpoint: "0.0.0.0:9464"
+      otlphttp:
+        endpoint: http://loki:3100/otlp
+
+    service:
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [prometheus,debug]
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+        logs:
+          receivers: [otlp]
+          processors: []
+          exporters: [otlphttp]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector:latest
+          args: ["--config", "/etc/otel-collector/otel-collector-config.yaml"]
+          volumeMounts:
+            - name: otel-config
+              mountPath: /etc/otel-collector
+      volumes:
+        - name: otel-config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+spec:
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: prometheus
+      port: 9464
+      targetPort: 9464
+  selector:
+    app: otel-collector
