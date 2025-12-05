@@ -22,6 +22,16 @@ from opentelemetry.instrumentation.logging import LoggingInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+from opentelemetry._logs import set_logger_provider
+from opentelemetry._logs import get_logger
+from opentelemetry.sdk._logs import LogRecord
+try:
+    from opentelemetry.sdk._logs import SeverityNumber
+except ImportError:
+    try:
+        from opentelemetry.sdk._logs._internal.severity import SeverityNumber
+    except ImportError:
+        from opentelemetry._logs.severity import SeverityNumber
 
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.metrics import MeterProvider
@@ -73,27 +83,31 @@ REQUEST_LATENCY_PROM = Histogram(
 ["method", "endpoint"],
 )
 
-import logging
-# setup logger that integrates with OpenTelemetry
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
-
 # Configure OTel structured logs
-log_provider = LoggerProvider()
-otlp_log_exporter = OTLPLogExporter(endpoint=OTEL_ENDPOINT, insecure=True)
-log_provider.add_log_record_processor(BatchLogRecordProcessor(otlp_log_exporter))
-LoggingInstrumentor().instrument(set_logging_format=True, logger_provider=log_provider)
-logger = logging.getLogger("comments-api")
+logger_provider = LoggerProvider(resource=resource)
+set_logger_provider(logger_provider)
+otlp_log_exporter = OTLPLogExporter(
+    endpoint=OTEL_ENDPOINT,
+    insecure=True
+)
+logger_provider.add_log_record_processor(
+    BatchLogRecordProcessor(otlp_log_exporter)
+)
+LoggingInstrumentor().instrument(
+    logger_provider=logger_provider,
+    set_logging_format=True
+)
+logger = get_logger("comments_api")
 
-# FastAPI app
-app = FastAPI(title="Comments API")
-
-# OpenTelemetry setup
+# OpenTelemetry setup TRACE
 provider = TracerProvider()
 otlp_exporter = OTLPSpanExporter(endpoint=OTEL_ENDPOINT, insecure=True)
 provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
 trace.set_tracer_provider(provider)
 tracer = trace.get_tracer(__name__)
 
+# FastAPI app
+app = FastAPI(title="Comments API")
 FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
 
 # Database table definition
@@ -135,15 +149,33 @@ def instrument_endpoint(endpoint_name: str):
         async def wrapper(request: Request, *args, **kwargs):
             method = request.method
 
-            logger.info(f"Endpoint called: {endpoint_name} method={method}")
-
             with tracer.start_as_current_span(endpoint_name, kind=SpanKind.SERVER) as span:
                 import time
                 start = time.time()
                 span.set_attribute("http.method", method)
                 span.set_attribute("http.route", endpoint_name)
+                span_context = trace.get_current_span().get_span_context()
+                trace_id = span_context.trace_id or 0
+                span_id = span_context.span_id or 0
+                trace_flags = getattr(span_context, "trace_flags", 0) or 0
 
                 try:
+                    record = LogRecord(
+                        timestamp=int(time.time() * 1_000_000_000),  # nanoseconds
+                        observed_timestamp=int(time.time() * 1_000_000_000),
+                        severity_number=SeverityNumber.INFO,
+                        severity_text="INFO",
+                        body=f"Endpoint called: {endpoint_name}",
+                        attributes={
+                            "endpoint": endpoint_name,
+                            "method": method,
+                        },
+                        trace_id=trace_id,
+                        span_id=span_id,
+                        trace_flags=trace_flags,
+                    )
+                    logger.emit(record)
+                    
                     result = await fn(request=request, *args, **kwargs)
                     status_code = getattr(result, "status_code", 200)
                     span.set_attribute("http.status_code", status_code)

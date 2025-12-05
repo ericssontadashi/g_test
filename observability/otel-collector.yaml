@@ -14,16 +14,20 @@ data:
     
     processors:
       batch:
-        timeout: 5s
-        send_batch_size: 512
 
     exporters:
       debug:
-        verbosity: detailed
+        verbosity: basic
       prometheus:
         endpoint: "0.0.0.0:9464"
-      otlphttp:
+      otlphttp/logs:
         endpoint: http://loki:3100/otlp
+        tls:
+          insecure: true
+      otlp/tempo:
+        endpoint: tempo:4317
+        tls:
+          insecure: true
 
     service:
       pipelines:
@@ -34,11 +38,11 @@ data:
         traces:
           receivers: [otlp]
           processors: [batch]
-          exporters: [debug]
+          exporters: [otlp/tempo,debug]
         logs:
           receivers: [otlp]
-          processors: []
-          exporters: [otlphttp]
+          processors: [batch]
+          exporters: [otlphttp/logs,debug]
 ---
 apiVersion: apps/v1
 kind: Deployment
