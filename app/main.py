@@ -1,14 +1,10 @@
 import os
-import asyncio
 from typing import List
 from fastapi import FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import Table, Column, Integer, String, Text, MetaData, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
-from sqlalchemy.exc import IntegrityError
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
-from prometheus_client import CollectorRegistry
-from prometheus_client import multiprocess
 
 # OpenTelemetry
 from opentelemetry import trace
@@ -19,12 +15,10 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
-from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs import LoggerProvider, LogRecord
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-from opentelemetry._logs import set_logger_provider
-from opentelemetry._logs import get_logger
-from opentelemetry.sdk._logs import LogRecord
+from opentelemetry._logs import set_logger_provider, get_logger
 try:
     from opentelemetry.sdk._logs import SeverityNumber
 except ImportError:
@@ -43,7 +37,11 @@ from opentelemetry import metrics
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@postgres:5432/commentsdb")
 OTEL_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
 
-resource = Resource.create({"service.name": "comments-api"})
+resource = Resource.create({
+    "service.name": "comments-api",
+    "service.namespace": "comments",
+    "service.version": "1.0.0",
+})
 
 metric_exporter = OTLPMetricExporter(
     endpoint=OTEL_ENDPOINT,
@@ -85,22 +83,15 @@ REQUEST_LATENCY_PROM = Histogram(
 
 # Configure OTel structured logs
 logger_provider = LoggerProvider(resource=resource)
+otlp_log_exporter = OTLPLogExporter(endpoint=OTEL_ENDPOINT,insecure=True)
+logger_provider.add_log_record_processor(BatchLogRecordProcessor(otlp_log_exporter))
+
 set_logger_provider(logger_provider)
-otlp_log_exporter = OTLPLogExporter(
-    endpoint=OTEL_ENDPOINT,
-    insecure=True
-)
-logger_provider.add_log_record_processor(
-    BatchLogRecordProcessor(otlp_log_exporter)
-)
-LoggingInstrumentor().instrument(
-    logger_provider=logger_provider,
-    set_logging_format=True
-)
+LoggingInstrumentor().instrument(logger_provider=logger_provider,set_logging_format=True)
 logger = get_logger("comments_api")
 
 # OpenTelemetry setup TRACE
-provider = TracerProvider()
+provider = TracerProvider(resource=resource)
 otlp_exporter = OTLPSpanExporter(endpoint=OTEL_ENDPOINT, insecure=True)
 provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
 trace.set_tracer_provider(provider)
@@ -108,7 +99,7 @@ tracer = trace.get_tracer(__name__)
 
 # FastAPI app
 app = FastAPI(title="Comments API")
-FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
+FastAPIInstrumentor.instrument_app(app, tracer_provider=provider, excluded_urls="(/health|/metrics)")
 
 # Database table definition
 metadata = MetaData()
@@ -148,7 +139,7 @@ def instrument_endpoint(endpoint_name: str):
         @wraps(fn)
         async def wrapper(request: Request, *args, **kwargs):
             method = request.method
-
+            
             with tracer.start_as_current_span(endpoint_name, kind=SpanKind.SERVER) as span:
                 import time
                 start = time.time()
@@ -173,6 +164,7 @@ def instrument_endpoint(endpoint_name: str):
                         trace_id=trace_id,
                         span_id=span_id,
                         trace_flags=trace_flags,
+                        resource=resource
                     )
                     logger.emit(record)
                     
