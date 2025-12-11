@@ -5,6 +5,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import Table, Column, Integer, String, Text, MetaData, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from starlette.responses import Response
 
 # OpenTelemetry
 from opentelemetry import trace
@@ -192,34 +193,57 @@ def instrument_endpoint(endpoint_name: str):
 @instrument_endpoint("/api/comment/new")
 async def create_comment(comment_in: CommentIn, request: Request):
     """Insert a comment into the DB."""
-    async with engine.begin() as conn:
-        stmt = comments_table.insert().values(
-            email=comment_in.email,
-            comment=comment_in.comment,
-            content_id=comment_in.content_id,
-        ).returning(comments_table.c.id)
-        result = await conn.execute(stmt)
-        new_id = result.scalar_one()
-    return {
-        "id": new_id,
-        "email": comment_in.email,
-        "comment": comment_in.comment,
-        "content_id": comment_in.content_id,
-    }
+    tracer = trace.get_tracer("comments_api.db")
+
+    with tracer.start_as_current_span("insert_comment") as span:
+        span.set_attribute("db.operation", "insert")
+        span.set_attribute("db.collection", "comments")
+        span.set_attribute("comment.email", comment_in.email)
+        span.set_attribute("comment.content_id", comment_in.content_id)
+        try:
+            async with engine.begin() as conn:
+                stmt = comments_table.insert().values(
+                    email=comment_in.email,
+                    comment=comment_in.comment,
+                    content_id=comment_in.content_id,
+                ).returning(comments_table.c.id)
+                result = await conn.execute(stmt)
+                new_id = result.scalar_one()
+
+            return {
+                "id": new_id,
+                "email": comment_in.email,
+                "comment": comment_in.comment,
+                "content_id": comment_in.content_id,
+            }
+        except Exception as e:
+            span.record_exception(e)
+            span.set_attribute("db.error", str(e))
+            raise
 
 @app.get("/api/comment/list/{content_id}", response_model=List[CommentOut])
 @instrument_endpoint("/api/comment/list/{content_id}")
 async def list_comments(content_id: int, request: Request):
     """List comments by content_id"""
-    async with engine.connect() as conn:
-        stmt = select(comments_table).where(comments_table.c.content_id == content_id).order_by(comments_table.c.id.desc())
-        result = await conn.execute(stmt)
-        rows = result.fetchall()
-        return [
-            {"id": r.id, "email": r.email, "comment": r.comment, "content_id": r.content_id} for r in rows
-        ]
+    tracer = trace.get_tracer("comments_api.db")
 
-from starlette.responses import Response
+    with tracer.start_as_current_span("list_comments") as span:
+        span.set_attribute("db.operation", "select")
+        span.set_attribute("db.collection", "comments")
+        span.set_attribute("query.content_id", content_id)
+
+        try:
+            async with engine.connect() as conn:
+                stmt = select(comments_table).where(comments_table.c.content_id == content_id).order_by(comments_table.c.id.desc())
+                result = await conn.execute(stmt)
+                rows = result.fetchall()
+                return [
+                    {"id": r.id, "email": r.email, "comment": r.comment, "content_id": r.content_id} for r in rows
+                ]
+        except Exception as e:
+            span.record_exception(e)
+            span.set_attribute("db.error", str(e))
+            raise
 
 @app.get("/health")
 async def health():

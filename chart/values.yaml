@@ -2,7 +2,6 @@ replicaCount: 1
 image:
   repository: registry/comments-api
   tag: latest
-  #pullPolicy: Always
   pullPolicy: IfNotPresent
 
 

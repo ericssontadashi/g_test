@@ -1,0 +1,81 @@
+trigger: none
+
+pool:
+  vmImage: 'ubuntu-latest'
+  name: personal
+variables:
+  imageName: "gtest-app"
+  tag: "$(Build.BuildId)"
+  acrLoginServer: "registry"
+  namespace: "mock"
+
+resources:
+  repositories:
+  - repository: g_test
+    type: github
+    endpoint: github.com_ericssontadashi
+    name: ericssontadashi/g_test
+    ref: main
+
+stages:
+- stage: Build
+  displayName: "Build Docker Image"
+  jobs:
+    - job: Build
+      displayName: "Build & Push Docker Image"
+      steps:
+
+      - checkout: g_test
+
+      - task: DockerInstaller@0
+        displayName: "Install Docker"
+
+      - script: |
+          echo "Building Docker image..."
+          cd ./app
+          docker build -t $(acrLoginServer)/$(imageName):$(tag) .
+        displayName: "Docker Build"
+
+      - script: |
+          echo "Run unit tests"
+        displayName: "Unit tests"
+
+- stage: Sast
+  displayName: "SAST steps"
+  jobs:
+    - job: Sast
+      displayName: "Run SAST steps"
+      steps:
+
+      - checkout: g_test
+
+      - script: |
+          echo "Run sonarqube on code."
+        displayName: "Run Sonarqube"
+
+      - script: |
+          echo "Run snyk on code."
+        displayName: "Run Snyk"
+
+- stage: Deploy
+  displayName: "Deploy to Kubernetes"
+  jobs:
+    - job: Deploy
+      displayName: "Helm Deploy to Local Cluster"
+
+      steps:
+        - checkout: g_test
+
+        - task: KubectlInstaller@0
+
+        - task: HelmInstaller@1
+
+        - bash: |
+            kubectl cluster-info
+          displayName: "Verify K8s Connection"
+
+        - bash: |
+            helm upgrade --install fastapi-comments ./chart \
+              --set image.repository=$(acrLoginServer)/$(imageName) \
+              --set image.tag=$(tag) --namespace $(namespace)
+          displayName: "Helm Deploy"
