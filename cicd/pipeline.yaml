@@ -40,25 +40,55 @@ stages:
           echo "Run unit tests"
         displayName: "Unit tests"
 
-- stage: Sast
-  displayName: "SAST steps"
+- stage: Trivy
+  displayName: "Trivy step"
+  dependsOn: Build
+  condition: succeeded()
   jobs:
-    - job: Sast
-      displayName: "Run SAST steps"
-      steps:
+  - job: Trivy
+    displayName: Trivy Scan
 
-      - checkout: g_test
+    steps:
+    - checkout: g_test
 
-      - script: |
-          echo "Run sonarqube on code."
-        displayName: "Run Sonarqube"
+    - script: |
+        IMAGE=$(acrLoginServer)/$(imageName):$(tag)
 
-      - script: |
-          echo "Run snyk on code."
-        displayName: "Run Snyk"
+        echo "Installing Trivy..."
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+          | sh -s -- -b /usr/local/bin
+
+        echo "Running Trivy scan..."
+        trivy image --severity HIGH,CRITICAL --exit-code 1 $IMAGE
+      displayName: Run Trivy Scan
+      continueOnError: true
+
+- stage: Checkov
+  displayName: "Checkov step"
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: Checkov
+    displayName: Checkov Scan
+    steps:
+    - checkout: g_test
+
+    - script: |
+        apt-get update
+        apt-get install -y python3-pip
+        python3 -m pip install --upgrade pip
+        python3 -m pip install checkov
+        checkov --version
+        checkov -d .
+      displayName: "Install & Run Checkov"
+      continueOnError: true
 
 - stage: Deploy
   displayName: "Deploy to Kubernetes"
+  dependsOn:
+  - Trivy
+  - Checkov
+  condition: succeeded()
   jobs:
     - job: Deploy
       displayName: "Helm Deploy to Local Cluster"
