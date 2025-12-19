@@ -21,14 +21,20 @@ postgres:
     enabled: true
     size: 1Gi
 
-
-otelCollector:
-  enabled: true
-  image: otel/opentelemetry-collector-contrib:0.79.0
-
-
 resources: {}
 
-
 ingress:
-  enabled: false
+  enabled: true
+  className: nginx
+
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+
+  hosts:
+    - host: comments.local
+      paths:
+        - path: /
+          pathType: Prefix
+
+  tls: []
